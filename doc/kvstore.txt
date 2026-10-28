@@ -1,0 +1,311 @@
+*kvstore.txt*  Store values encrypted on your machine and read them on demand
+
+                  kvstore: encrypted values for Neovim ~
+
+==============================================================================
+CONTENTS                                                    *kvstore-contents*
+
+  1. Introduction ............................... |kvstore-introduction|
+  2. Requirements ............................... |kvstore-requirements|
+  3. Setup ...................................... |kvstore-setup|
+  4. Commands ................................... |kvstore-commands|
+  5. Scopes ..................................... |kvstore-scopes|
+  6. Key names .................................. |kvstore-key-names|
+  7. Lua API .................................... |kvstore-api|
+  8. Where things are stored .................... |kvstore-storage|
+  9. Keystore backends ......................... |kvstore-backends|
+ 10. How a value is protected ................... |kvstore-security|
+ 11. Limitations ................................ |kvstore-limitations|
+ 12. Removing everything ........................ |kvstore-removing|
+
+==============================================================================
+1. INTRODUCTION                                         *kvstore-introduction*
+
+kvstore stores values encrypted on your machine and gives them back on
+demand. A value is typed at a prompt that does not echo it, is kept in a
+single encrypted file, and is printed only when you ask for it.
+
+Values belong either to the current project or to you globally, so the same
+key name can hold a different value in each project.
+
+The plugin behaves the same on macOS, Windows and Linux. Encryption is
+implemented inside the plugin, so no external program is needed to open a
+vault.
+
+What kvstore protects you against is accidental exposure: a value committed to
+a repository, carried into a backup or a sync folder, read over your shoulder,
+or recalled out of a history file. It does not protect you from a program that
+is already running as you. See |kvstore-security|.
+
+==============================================================================
+2. REQUIREMENTS                                         *kvstore-requirements*
+
+Neovim 0.12 or newer. `setup()` refuses to run on anything older.
+
+Nothing else is required. Encryption, random numbers and hashing all come from
+Neovim itself.
+
+A native keystore is used when one is available, which needs the tool that
+comes with your system. Where none is available, kvstore falls back to a file
+that only you can read and tells you so once. See |kvstore-backends|.
+
+==============================================================================
+3. SETUP                                                       *kvstore-setup*
+
+The commands are created by `setup()`, so it has to be called before
+|:KVStore|, |:KVGet| and |:KVDelete| exist: >lua
+
+    require("kvstore").setup()
+<
+With every option spelled out: >lua
+
+    require("kvstore").setup({
+      backend = "auto",
+      confirm_value = false,
+    })
+<
+                                                       *kvstore-setup-backend*
+`backend`         string, default `"auto"`
+
+    Which keystore holds the master key. `"auto"` detects one, which is almost
+    always what you want. The accepted names are `"macos"`, `"windows"`,
+    `"wsl"`, `"linux"` and `"file"`. Forcing a backend is useful when
+    detection picks one you do not want, for example to pin `"file"` on a
+    machine where the session keyring is never unlocked.
+
+                                                 *kvstore-setup-confirm-value*
+`confirm_value`   boolean, default `false`
+
+    When `true`, |:KVStore| asks for the value a second time and stores
+    nothing if the two do not match. A prompt that does not echo gives no
+    feedback, so a typo is otherwise invisible until the stored value fails
+    somewhere else.
+
+==============================================================================
+4. COMMANDS                                                 *kvstore-commands*
+
+                                                                    *:KVStore*
+:KVStore [--global] {key}
+            Store a value for {key}. You are asked for the value at a prompt
+            that does not echo it, and the value is never given on the command
+            line: a second argument is refused.
+
+            If {key} already exists, you are asked whether to overwrite it
+            before you are asked for the value. The default answer is No, and
+            <Esc> ends the command.
+
+            An empty value cancels. Nothing is written and any existing value
+            is left alone. Use |:KVDelete| to remove a key.
+
+                                                                      *:KVGet*
+:KVGet [--global] {key}
+            Print the value of {key}.
+
+            The value is printed in a way that does not add it to the message
+            history, so `:messages` cannot recall it. It is not copied to a
+            register and not put on the clipboard.
+
+                                                                   *:KVDelete*
+:KVDelete [--global] {key}
+            Remove {key}. A key that is not stored is reported as an error.
+
+All three commands complete `--global` and the key names of the scope you are
+addressing.
+
+==============================================================================
+5. SCOPES                                                     *kvstore-scopes*
+
+Without `--global` a command addresses the current project. With `--global` it
+addresses your global keys. There is no fallback between the two: a key stored
+in one scope is never answered from the other, so `:KVGet token` cannot
+quietly return a value from somewhere else.
+
+A project is Neovim's current working directory, the one |:pwd| reports, read
+at the moment each command runs. Symbolic links are resolved first, so the
+same directory reached through different links is the same project. On Windows
+the path is compared without regard to case.
+
+The directory itself is not stored. Only its SHA-256 hash is, and that hash is
+inside the encrypted file.
+
+Because the project is the working directory:
+
+- |:cd| changes which keys you see, immediately.
+- Opening Neovim in a subdirectory of a project is a different project.
+- Renaming or moving a project directory changes the hash, so its keys look
+  as though they have vanished. They are still in the vault, under the old
+  hash, and there is no command in this version to move them.
+
+==============================================================================
+6. KEY NAMES                                               *kvstore-key-names*
+
+A key name may contain ASCII letters, digits, `.`, `_` and `-`, and may be
+between 1 and 128 characters long. Anything else is refused before you are
+asked for a value.
+
+A colon is refused because it separates the fields of the name a value is
+stored under. Spaces are not allowed, which also means a key name is always a
+single command argument.
+
+==============================================================================
+7. LUA API                                                       *kvstore-api*
+
+                                                           *kvstore.get()*
+require("kvstore").get({key} [, {opts}])
+
+    Return the value of {key}, or `nil` and a message.
+
+    {opts} is an optional table. `global = true` reads the global scope; the
+    default is the current project.
+
+    This is the whole reason the plugin has a Lua interface: reading a value
+    in a configuration without putting it in the configuration. >lua
+
+        local token, err = require("kvstore").get("github-token")
+        if not token then
+          vim.notify("kvstore: " .. err, vim.log.levels.WARN)
+        end
+<
+    It never prints anything and never notifies. A caller decides what a
+    missing key means.
+
+                                                         *kvstore.setup()*
+require("kvstore").setup([{opts}])
+
+    Apply the options in |kvstore-setup| and create the commands. Returns the
+    options actually in effect.
+
+There is deliberately no public way to store a value from Lua. A value only
+ever arrives through the prompt, because a Lua setter would be the obvious way
+for a value to get into a configuration file or a script.
+
+Every other module is internal and may change without notice.
+
+==============================================================================
+8. WHERE THINGS ARE STORED                                   *kvstore-storage*
+
+Two files, both under `stdpath("data")/kvstore/`: >
+
+    vault.kvs       every value, encrypted
+    master.key      the master key, only when the file fallback is in use
+    master.dpapi    the master key, only on Windows and WSL
+<
+Run `:echo stdpath("data")` to see the directory on your machine.
+
+The vault is a single encrypted file. Key names live inside the ciphertext
+along with the values, so the file does not reveal what you store or which
+projects you have. The file begins with the four bytes `KVST` and a format
+version, and every write replaces it atomically, so an interrupted write
+cannot leave a half-written vault.
+
+A write takes a lock next to the vault, so two Neovim instances storing
+different keys at the same time cannot lose each other's entry. Reads take no
+lock.
+
+Back up `vault.kvs` together with the master key. Either one alone is useless.
+
+==============================================================================
+9. KEYSTORE BACKENDS                                        *kvstore-backends*
+
+The master key is generated the first time it is needed and is kept by your
+system, so nothing has to be typed to unlock the vault. Backends are tried in
+this order and the first one that applies is used: >
+
+    macos     Keychain, through the security tool
+    windows   DPAPI for the current user, through powershell.exe
+    wsl       DPAPI for the Windows user, through powershell.exe
+    linux     Secret Service, through secret-tool
+    file      a file only you can read
+<
+macOS needs `security`, which is part of the system. Linux needs `secret-tool`
+and a running session bus, which an SSH or headless session usually does not
+have. Windows and WSL need `powershell.exe`, which is always present.
+
+The key is never passed as a command-line argument and never put in the
+environment of these tools: arguments are visible to every process of the same
+user. It always travels on standard input.
+
+On Windows and WSL the key is protected with DPAPI and the result is kept in
+`master.dpapi`. It is tied to your Windows account and that machine, so the
+file is useless to anyone else, and it does not appear in the Credential
+Manager window.
+
+When no keystore applies, the key is written to `master.key`, readable only by
+you, and you are warned once per session. On Unix that is file mode 0600. On
+Windows the equivalent is applied with `icacls`: inherited permissions are
+dropped and only your account is granted access. This protects the key from
+other users on the machine. It does not protect it from anything running as
+you.
+
+Each command performs exactly one keystore read. The key is held for the
+duration of that command and not beyond it.
+
+==============================================================================
+10. HOW A VALUE IS PROTECTED                                *kvstore-security*
+
+What kvstore does:
+
+- A value is only ever typed at |inputsecret()|, which does not echo it and
+  adds nothing to any history. No command accepts a value as an argument,
+  because an argument is recorded in the command history and written to the
+  |shada| file.
+- |:KVGet| prints with `nvim_echo()` and no history flag, so the value is on
+  screen and nowhere else.
+- A value is never written to a register, the clipboard, a log, a
+  notification or an error message.
+- Values and key names are encrypted together with authenticated encryption.
+  A vault that has been tampered with is refused rather than partly read.
+- A secret crossing a process boundary goes on standard input. Tools are run
+  with an argument list, never through a shell.
+- If a tool fails and quotes back what it read, that text is removed from the
+  message before you see it.
+
+What kvstore does not do:
+
+- It does not protect you from code running as you. Anything that can run as
+  your user can ask the same keystore for the same master key. There is no
+  master passphrase in this version, because unlocking without a prompt is
+  what lets a value be read in a configuration or a headless session.
+- It cannot control what other plugins do with a printed value. See
+  |kvstore-limitations|.
+
+==============================================================================
+11. LIMITATIONS                                          *kvstore-limitations*
+
+- Renaming or moving a project directory changes its hash, so its keys appear
+  to vanish. Opening Neovim in a subdirectory is a different project for the
+  same reason.
+- Message and notification plugins such as noice.nvim and nvim-notify keep
+  their own history of what passes through them. A value printed by |:KVGet|
+  may be retained there, which kvstore cannot prevent. This is also why
+  |:KVGet| never copies to a register: a clipboard manager is equally out of
+  reach.
+- The file fallback protects the master key from other users, not from
+  programs running as you.
+- If the master key is lost, the vault cannot be recovered. There is no
+  recovery code and no second copy.
+- A headless or SSH session on Linux usually has no Secret Service, so it uses
+  the file fallback.
+- |:KVStore| cannot be scripted, because a value is only ever read from a
+  prompt. Reading is scriptable with |kvstore.get()|.
+- This version has no way to rotate the master key, no command to list keys,
+  and no way to move keys between projects or machines.
+
+==============================================================================
+12. REMOVING EVERYTHING                                      *kvstore-removing*
+
+Delete the vault and the master key. Both are under
+`stdpath("data")/kvstore/`: delete that directory to remove the vault, the
+DPAPI blob and the file fallback together.
+
+Where the key is in a native keystore, remove it there as well. It is stored
+under the service name `kvstore` and your user name as the account: >
+
+    macOS     security delete-generic-password -s kvstore -a "$USER"
+    Linux     secret-tool clear service kvstore account "$USER"
+<
+On Windows and WSL there is nothing else to remove: deleting `master.dpapi`
+removes the key.
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:
