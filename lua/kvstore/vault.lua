@@ -1,9 +1,13 @@
 local crypto = require("kvstore.crypto")
 
 local MAGIC = "KVST"
-local FORMAT_VERSION = 1
-local HEADER = MAGIC .. string.char(FORMAT_VERSION)
-local MINIMUM_SIZE = #HEADER + crypto.SALT_BYTES + crypto.TAG_BYTES
+local FORMAT_VERSION = 2
+-- Version 1 held only strings, which are valid version 2 values, so it is still
+-- read. Every write produces the current version, which migrates a vault in
+-- place the first time it is written to.
+local READABLE_VERSIONS = { [1] = true, [2] = true }
+local HEADER_SIZE = #MAGIC + 1
+local MINIMUM_SIZE = HEADER_SIZE + crypto.SALT_BYTES + crypto.TAG_BYTES
 local LOCK_STALE_SECONDS = 10
 local OWNER_ONLY_FILE = tonumber("600", 8)
 local OWNER_ONLY_DIRECTORY = tonumber("700", 8)
@@ -12,6 +16,10 @@ local M = {}
 
 M.MAGIC = MAGIC
 M.FORMAT_VERSION = FORMAT_VERSION
+
+local function header_for(version)
+  return MAGIC .. string.char(version)
+end
 
 local function ensure_directory(directory)
   if vim.fn.isdirectory(directory) == 1 then
@@ -150,7 +158,7 @@ function Vault:entries()
   end
 
   local version = data:byte(#MAGIC + 1)
-  if version ~= FORMAT_VERSION then
+  if not READABLE_VERSIONS[version] then
     return nil, string.format("the vault uses format version %d, which this plugin cannot read", version)
   end
 
@@ -163,7 +171,7 @@ function Vault:entries()
     return nil, key_err
   end
 
-  local plaintext = crypto.open(key, data:sub(#HEADER + 1), HEADER)
+  local plaintext = crypto.open(key, data:sub(HEADER_SIZE + 1), header_for(version))
   if not plaintext then
     return nil, "the vault could not be opened: it is corrupt or the master key is wrong"
   end
@@ -181,8 +189,15 @@ function Vault:save(entries)
     return nil, key_err
   end
 
-  local payload = vim.json.encode({ entries = next(entries) ~= nil and entries or vim.empty_dict() })
-  return write_atomic(self.path, HEADER .. crypto.seal(key, payload, HEADER))
+  local encoded, payload = pcall(vim.json.encode, {
+    entries = next(entries) ~= nil and entries or vim.empty_dict(),
+  })
+  if not encoded then
+    return nil, string.format("the vault contents could not be encoded: %s", tostring(payload))
+  end
+
+  local header = header_for(FORMAT_VERSION)
+  return write_atomic(self.path, header .. crypto.seal(key, payload, header))
 end
 
 local function modify(vault, change)

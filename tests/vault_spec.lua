@@ -252,6 +252,81 @@ describe("vault on disk", function()
   end)
 end)
 
+describe("vault format", function()
+  it("stamps the current version on every write", function()
+    local path = temporary_path()
+    new_vault({ path = path }):set("global:a", "1")
+
+    assert.equals(2, read_raw(path):byte(5))
+    assert.equals(2, vault.FORMAT_VERSION)
+  end)
+
+  it("reads a version 1 vault, whose values were all strings", function()
+    local path = temporary_path()
+    local header = "KVST" .. string.char(1)
+    local payload = vim.json.encode({ entries = { ["global:legacy"] = "from-v1" } })
+    write_raw(path, header .. crypto.seal(MASTER_KEY, payload, header))
+
+    assert.equals("from-v1", new_vault({ path = path }):get("global:legacy"))
+  end)
+
+  it("migrates a version 1 vault to version 2 on the first write", function()
+    local path = temporary_path()
+    local header = "KVST" .. string.char(1)
+    local payload = vim.json.encode({ entries = { ["global:legacy"] = "from-v1" } })
+    write_raw(path, header .. crypto.seal(MASTER_KEY, payload, header))
+    assert.equals(1, read_raw(path):byte(5))
+
+    local store = new_vault({ path = path })
+    assert.is_true(store:set("global:fresh", { added = true }))
+
+    assert.equals(2, read_raw(path):byte(5))
+    assert.equals("from-v1", store:get("global:legacy"))
+    assert.same({ added = true }, store:get("global:fresh"))
+  end)
+
+  it("keeps the type of any value json can encode", function()
+    local store = new_vault()
+    local cases = {
+      ["global:text"] = "a string",
+      ["global:empty-text"] = "",
+      ["global:count"] = 42,
+      ["global:ratio"] = 4.5,
+      ["global:yes"] = true,
+      ["global:no"] = false,
+      ["global:table"] = { a = 1, b = { "x", "y" } },
+      ["global:list"] = { 1, 2, 3 },
+      ["global:empty-table"] = {},
+      ["global:null"] = vim.NIL,
+    }
+
+    for name, value in pairs(cases) do
+      assert.is_true(store:set(name, value), name)
+    end
+
+    for name, value in pairs(cases) do
+      assert.same(value, store:get(name), name)
+    end
+
+    assert.equals(42, store:get("global:count"))
+    assert.equals("number", type(store:get("global:count")))
+    assert.is_false(store:get("global:no"))
+    assert.is_true(store:exists("global:null"))
+  end)
+
+  it("reports contents it cannot encode instead of writing them", function()
+    local path = temporary_path()
+    local store = new_vault({ path = path })
+    store:set("global:a", "1")
+
+    local written, err = store:set("global:bad", function() end)
+    assert.is_nil(written)
+    assert.truthy(err:find("could not be encoded", 1, true))
+
+    assert.equals("1", new_vault({ path = path }):get("global:a"))
+  end)
+end)
+
 describe("vault failures", function()
   it("reports a file that is not a vault", function()
     local path = temporary_path()
