@@ -87,7 +87,9 @@ The plugin is developed on macOS, Windows and Linux. Code must behave the same o
 
 ## Documentation
 
-- All documentation lives in `doc/`. Do not create documentation files elsewhere.
+- `README.md` at the repository root is the entry point for someone who has never seen the plugin: what it
+  is for, how to install it, how to use it. It is the one documentation file outside `doc/`.
+- Every other documentation file lives in `doc/`. Do not create documentation files anywhere else.
 - The `:help` file is `doc/kvstore.txt`. Update it whenever a command, flag or behavior changes.
 - Keep documentation in sync with the code. Outdated documentation is a bug.
 
