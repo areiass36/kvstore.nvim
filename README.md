@@ -66,13 +66,11 @@ once.
 
 ## Installation
 
-Replace `<owner>` with this repository's path.
-
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "<owner>/kvstore.nvim",
+  "areiass36/kvstore.nvim",
   opts = {},
 }
 ```
@@ -80,7 +78,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 With Neovim 0.12's built-in plugin manager:
 
 ```lua
-vim.pack.add({ "https://github.com/<owner>/kvstore.nvim" })
+vim.pack.add({ "https://github.com/areiass36/kvstore.nvim" })
 require("kvstore").setup()
 ```
 
