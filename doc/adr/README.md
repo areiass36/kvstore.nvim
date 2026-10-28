@@ -26,3 +26,4 @@ add a new record and mark the old one as superseded.
 | 0018 | [Key name rules](0018-key-name-rules.md) | Accepted |
 | 0019 | [Vault writes are serialised with a lock file](0019-concurrent-instances.md) | Accepted |
 | 0020 | [The Windows and WSL master key is protected with DPAPI](0020-windows-master-key-mechanism.md) | Accepted |
+| 0021 | [The master key is read once per command](0021-master-key-lifetime.md) | Accepted |
