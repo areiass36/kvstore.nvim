@@ -30,6 +30,24 @@ local function missing(key, request)
   return string.format("'%s' is not stored in the %s scope", key, scope.label(request))
 end
 
+-- The Lua read consults both scopes, so it may not claim it looked in one.
+local function missing_anywhere(key, request)
+  if request and request.global then
+    return string.format("'%s' is not stored in the global scope", key)
+  end
+  return string.format("'%s' is not stored in the project or the global scope", key)
+end
+
+-- A value that is not a string is shown as its JSON encoding, which is
+-- unambiguous and can be read back.
+local function displayable(value)
+  if type(value) == "string" then
+    return value
+  end
+  local encoded, text = pcall(vim.json.encode, value)
+  return encoded and text or tostring(value)
+end
+
 function M.parse(arguments)
   local request = { global = false }
   local keys = {}
@@ -147,7 +165,7 @@ function M.show(arguments, options)
 
   -- The one place a value is printed, and the only way to print it without
   -- leaving a copy in the message history.
-  vim.api.nvim_echo({ { value } }, false, {})
+  vim.api.nvim_echo({ { displayable(value) } }, false, {})
   return true
 end
 
@@ -177,20 +195,58 @@ end
 
 -- The public read path. It reports through its return values and never notifies,
 -- because a caller in a configuration decides what to do about a missing key.
+--
+-- Without an explicit scope it answers from the project and falls back to the
+-- global scope, so a caller asking for a configuration value gets the most
+-- specific one. Both lookups share one vault, and so one keystore read.
 function M.read(key, request, options)
-  local name, scope_err = scope.resolve(key, request)
+  local valid, key_err = scope.validate_key(key)
+  if not valid then
+    return nil, key_err
+  end
+
+  local wanted = { { global = true } }
+  if not (request and request.global) then
+    wanted = { {}, { global = true } }
+  end
+
+  local store = M.open_vault(options)
+  for _, candidate in ipairs(wanted) do
+    local value, err = store:get(scope.resolve(key, candidate))
+    if err then
+      return nil, err
+    end
+    if value ~= nil then
+      return value
+    end
+  end
+  return nil, missing_anywhere(key, request)
+end
+
+-- The public write path. It is always global: configuration that vanished when
+-- the user changed directory would be a defect, so it does not take a scope.
+function M.write(key, value, options)
+  if value == nil then
+    return nil, "a value is required"
+  end
+
+  local name, scope_err = scope.resolve(key, { global = true })
   if not name then
     return nil, scope_err
   end
 
-  local value, err = M.open_vault(options):get(name)
-  if err then
-    return nil, err
+  local encodable, encode_err = pcall(vim.json.encode, value)
+  if not encodable then
+    return nil, string.format("a %s cannot be stored: %s", type(value), tostring(encode_err))
   end
-  if value == nil then
-    return nil, missing(key, request)
+
+  local store = M.open_vault(options)
+  local usable, usable_err = store:usable()
+  if not usable then
+    return nil, usable_err
   end
-  return value
+
+  return store:set(name, value)
 end
 
 function M.complete(arglead, cmdline, options)

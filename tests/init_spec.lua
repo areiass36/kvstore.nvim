@@ -6,30 +6,31 @@ describe("kvstore", function()
   local saved
 
   before_each(function()
-    saved = { read = commands.read, options = kvstore.options }
+    saved = { read = commands.read, write = commands.write, options = kvstore.options }
   end)
 
   after_each(function()
     commands.read = saved.read
+    commands.write = saved.write
     kvstore.options = saved.options
   end)
 
-  it("exposes setup and get and nothing else", function()
+  it("exposes setup, get and set and nothing else", function()
     local surface = {}
     for member in pairs(kvstore) do
       surface[#surface + 1] = member
     end
     table.sort(surface)
 
-    assert.same({ "get", "options", "setup" }, surface)
+    assert.same({ "get", "options", "set", "setup" }, surface)
     assert.is_function(kvstore.setup)
     assert.is_function(kvstore.get)
+    assert.is_function(kvstore.set)
   end)
 
-  it("has no public way to store a value", function()
-    assert.is_nil(kvstore.set)
-    assert.is_nil(kvstore.store)
+  it("exposes no public delete", function()
     assert.is_nil(kvstore.delete)
+    assert.is_nil(kvstore.remove)
   end)
 
   it("defaults to automatic backend detection and a single prompt", function()
@@ -91,6 +92,41 @@ describe("kvstore", function()
 
     kvstore.get("token", { global = true })
     assert.is_true(seen.global)
+  end)
+
+  it("writes through the same path as the commands", function()
+    local seen
+    commands.write = function(key, value, options)
+      seen = { key = key, value = value, options = options }
+      return true
+    end
+
+    kvstore.setup({ confirm_value = true })
+    assert.is_true(kvstore.set("api-key", { a = 1 }))
+    assert.equals("api-key", seen.key)
+    assert.same({ a = 1 }, seen.value)
+    assert.is_true(seen.options.confirm_value)
+  end)
+
+  it("takes no scope on set, because it is always global", function()
+    local seen
+    commands.write = function(key, value)
+      seen = { key = key, value = value }
+      return true
+    end
+
+    kvstore.set("api-key", "v")
+    assert.equals(2, vim.tbl_count(seen))
+  end)
+
+  it("returns nil and a reason for a value it cannot write", function()
+    commands.write = function()
+      return nil, "a value is required"
+    end
+
+    local written, err = kvstore.set("api-key", nil)
+    assert.is_nil(written)
+    assert.equals("a value is required", err)
   end)
 
   it("returns nil and a reason for a key it cannot read", function()

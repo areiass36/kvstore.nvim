@@ -279,6 +279,14 @@ describe("commands", function()
       assert.is_nil(notified():find(SECRET, 1, true))
     end)
 
+    it("prints a value that is not a string as json", function()
+      commands.write("options", { retries = 3 }, {})
+
+      assert.is_true(commands.show({ "--global", "options" }, {}))
+      assert.equals('{"retries":3}', echoes[1].chunks[1][1])
+      assert.is_false(echoes[1].history)
+    end)
+
     it("reports a missing key and names the scope", function()
       commands.show({ "absent" }, {})
       assert.equals("kvstore: 'absent' is not stored in the project scope", last_error())
@@ -354,8 +362,15 @@ describe("commands", function()
       local value, err = commands.read("absent", {}, {})
 
       assert.is_nil(value)
-      assert.equals("'absent' is not stored in the project scope", err)
+      assert.equals("'absent' is not stored in the project or the global scope", err)
       assert.same({}, notices)
+    end)
+
+    it("reports a missing key in the global scope alone when asked", function()
+      local value, err = commands.read("absent", { global = true }, {})
+
+      assert.is_nil(value)
+      assert.equals("'absent' is not stored in the global scope", err)
     end)
 
     it("reports a bad key name through its return values", function()
@@ -365,12 +380,143 @@ describe("commands", function()
       assert.truthy(err:find("may only contain", 1, true))
     end)
 
-    it("reads a global key when asked", function()
+    it("falls back to the global scope when the project has no such key", function()
       answers.secrets = { SECRET }
       commands.store({ "--global", "token" }, {})
 
       assert.equals(SECRET, commands.read("token", { global = true }, {}))
-      assert.is_nil(commands.read("token", {}, {}))
+      assert.equals(SECRET, commands.read("token", {}, {}))
+    end)
+
+    it("prefers the project value when both scopes hold the key", function()
+      answers.secrets = { "global-value", "project-value" }
+      commands.store({ "--global", "token" }, {})
+      commands.store({ "token" }, {})
+
+      assert.equals("project-value", commands.read("token", {}, {}))
+      assert.equals("global-value", commands.read("token", { global = true }, {}))
+    end)
+
+    it("does not fall back when the global scope is asked for explicitly", function()
+      answers.secrets = { SECRET }
+      commands.store({ "token" }, {})
+
+      local value, err = commands.read("token", { global = true }, {})
+      assert.is_nil(value)
+      assert.equals("'token' is not stored in the global scope", err)
+    end)
+
+    it("consults both scopes with a single keystore read", function()
+      answers.secrets = { SECRET }
+      commands.store({ "--global", "token" }, {})
+
+      local reads = 0
+      commands.open_vault = function()
+        return vault.new({
+          path = path,
+          master_key = function()
+            reads = reads + 1
+            return MASTER_KEY
+          end,
+        })
+      end
+
+      assert.equals(SECRET, commands.read("token", {}, {}))
+      assert.equals(1, reads)
+    end)
+  end)
+
+  describe("write", function()
+    it("stores in the global scope and is readable from any project", function()
+      assert.is_true(commands.write("api-key", "k-123", {}))
+
+      assert.equals("k-123", store_for():get("global:api-key"))
+      assert.is_nil(store_for():get(scope.resolve("api-key", {})))
+      assert.equals("k-123", commands.read("api-key", {}, {}))
+    end)
+
+    it("never notifies and never echoes", function()
+      commands.write("api-key", "k-123", {})
+
+      assert.same({}, notices)
+      assert.same({}, echoes)
+    end)
+
+    it("keeps the type of every value vim.json can encode", function()
+      local cases = {
+        text = "a string",
+        empty = "",
+        count = 42,
+        ratio = 4.5,
+        enabled = true,
+        disabled = false,
+        options = { retries = 3, hosts = { "a", "b" }, nested = { deep = true } },
+        list = { 1, 2, 3 },
+      }
+
+      for key, value in pairs(cases) do
+        assert.is_true(commands.write(key, value, {}), key)
+      end
+
+      for key, value in pairs(cases) do
+        assert.same(value, commands.read(key, {}, {}), key)
+      end
+
+      assert.equals("number", type(commands.read("count", {}, {})))
+      assert.equals(42, commands.read("count", {}, {}))
+      assert.equals("boolean", type(commands.read("enabled", {}, {})))
+      assert.is_false(commands.read("disabled", {}, {}))
+    end)
+
+    it("stores a value that json represents as null", function()
+      assert.is_true(commands.write("nothing", vim.NIL, {}))
+      assert.equals(vim.NIL, commands.read("nothing", {}, {}))
+    end)
+
+    it("overwrites without asking, because no one is at the keyboard", function()
+      commands.write("api-key", "first", {})
+      assert.is_true(commands.write("api-key", "second", {}))
+
+      assert.equals("second", commands.read("api-key", {}, {}))
+      assert.same({}, prompts)
+    end)
+
+    it("rejects a missing value", function()
+      local written, err = commands.write("api-key", nil, {})
+
+      assert.is_nil(written)
+      assert.equals("a value is required", err)
+      assert.is_nil(store_for():get("global:api-key"))
+    end)
+
+    it("rejects a value json cannot encode, before touching the vault", function()
+      local written, err = commands.write("api-key", function() end, {})
+
+      assert.is_nil(written)
+      assert.truthy(err:find("cannot be stored", 1, true))
+      assert.is_nil(store_for():get("global:api-key"))
+    end)
+
+    it("rejects a bad key name", function()
+      local written, err = commands.write("my key", "v", {})
+
+      assert.is_nil(written)
+      assert.truthy(err:find("may only contain", 1, true))
+    end)
+
+    it("reports a keystore it cannot reach", function()
+      commands.open_vault = function()
+        return vault.new({
+          path = path,
+          master_key = function()
+            return nil, "the keystore is unavailable"
+          end,
+        })
+      end
+
+      local written, err = commands.write("api-key", "v", {})
+      assert.is_nil(written)
+      assert.equals("the keystore is unavailable", err)
     end)
   end)
 

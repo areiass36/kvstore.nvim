@@ -21,10 +21,17 @@ function M.setup(opts)
   return M.options
 end
 
--- Reading is the whole point of a public interface, so it is here. There is no
--- public setter: a value only ever arrives through the prompt.
+-- Reads the project scope first and falls back to the global one. Pass
+-- { global = true } to read the global scope only.
 function M.get(key, opts)
   return commands.read(key, opts or {}, M.options)
+end
+
+-- Stores a configuration value, always in the global scope. Any value vim.json
+-- can encode is accepted. A caller passing a secret is responsible for where
+-- that secret came from: a literal in a configuration file protects nothing.
+function M.set(key, value)
+  return commands.write(key, value, M.options)
 end
 
 return M
