@@ -112,12 +112,31 @@ function M.new(opts)
   }, Vault)
 end
 
+-- Held for the lifetime of this vault, which is one command. Reaching a keystore
+-- costs a process, and a single command needs the key up to four times.
 function Vault:key()
+  if self.held_key then
+    return self.held_key
+  end
+
   local key, err = self.master_key()
   if not key then
     return nil, err or "the master key is not available"
   end
+
+  self.held_key = key
   return key
+end
+
+-- Answers whether the vault could be written to, without handing the key out.
+-- An absent vault file reads as empty, so nothing else proves the key is
+-- reachable before the user is asked for a value.
+function Vault:usable()
+  local key, err = self:key()
+  if not key then
+    return nil, err
+  end
+  return true
 end
 
 function Vault:entries()

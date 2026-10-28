@@ -126,6 +126,83 @@ describe("vault entries", function()
   end)
 end)
 
+describe("vault usable", function()
+  it("confirms a reachable master key without returning it", function()
+    assert.is_true(new_vault():usable())
+  end)
+
+  it("reports an unreachable master key even when no vault file exists", function()
+    local store = new_vault({
+      master_key = function()
+        return nil, "the keystore is unavailable"
+      end,
+    })
+
+    local usable, err = store:usable()
+    assert.is_nil(usable)
+    assert.equals("the keystore is unavailable", err)
+    assert.same({}, store:entries())
+  end)
+end)
+
+describe("vault master key handling", function()
+  it("reaches the key source once however many operations one vault performs", function()
+    local reads = 0
+    local store = vault.new({
+      path = temporary_path(),
+      master_key = function()
+        reads = reads + 1
+        return MASTER_KEY
+      end,
+    })
+
+    store:usable()
+    store:set("global:a", "1")
+    store:get("global:a")
+    store:exists("global:a")
+    store:list_names()
+    store:delete("global:a")
+
+    assert.equals(1, reads)
+  end)
+
+  it("reaches the key source again for a new vault", function()
+    local reads = 0
+    local path = temporary_path()
+    local function source()
+      reads = reads + 1
+      return MASTER_KEY
+    end
+
+    vault.new({ path = path, master_key = source }):set("global:a", "1")
+    vault.new({ path = path, master_key = source }):get("global:a")
+
+    assert.equals(2, reads)
+  end)
+
+  it("does not hold on to a failure", function()
+    local attempts = 0
+    local store = vault.new({
+      path = temporary_path(),
+      master_key = function()
+        attempts = attempts + 1
+        if attempts == 1 then
+          return nil, "the keystore is locked"
+        end
+        return MASTER_KEY
+      end,
+    })
+
+    local usable, err = store:usable()
+    assert.is_nil(usable)
+    assert.equals("the keystore is locked", err)
+
+    assert.is_true(store:usable())
+    assert.is_true(store:set("global:a", "1"))
+    assert.equals(2, attempts)
+  end)
+end)
+
 describe("vault on disk", function()
   it("never writes the value or the key name in the clear", function()
     local path = temporary_path()
