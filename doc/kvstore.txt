@@ -22,11 +22,17 @@ CONTENTS                                                    *kvstore-contents*
 1. INTRODUCTION                                         *kvstore-introduction*
 
 kvstore stores values encrypted on your machine and gives them back on
-demand. A value is typed at a prompt that does not echo it, is kept in a
-single encrypted file, and is printed only when you ask for it.
+demand. It serves two purposes with one file.
 
-Values belong either to the current project or to you globally, so the same
-key name can hold a different value in each project.
+As a place for secrets, a value is typed at a prompt that does not echo it and
+is printed only when you ask for it. Those values belong either to the current
+project or to you globally, so the same key name can hold a different value in
+each project. That is what |kvstore-commands| are for.
+
+As a light store for configuration, another plugin or your own configuration
+reads and writes values from Lua, of any type, through one interface that is
+the same on every machine. Those values are always global. That is what
+|kvstore-api| is for.
 
 The plugin behaves the same on macOS, Windows and Linux. Encryption is
 implemented inside the plugin, so no external program is needed to open a
@@ -116,9 +122,14 @@ addressing.
 5. SCOPES                                                     *kvstore-scopes*
 
 Without `--global` a command addresses the current project. With `--global` it
-addresses your global keys. There is no fallback between the two: a key stored
-in one scope is never answered from the other, so `:KVGet token` cannot
-quietly return a value from somewhere else.
+addresses your global keys. For the commands there is no fallback between the
+two: a key stored in one scope is never answered from the other, so
+`:KVGet token` cannot quietly return a value from somewhere else.
+
+|kvstore.get()| is the exception, and deliberately so: it reads the project
+first and falls back to the global scope, because a caller asking for a
+configuration value wants the most specific one. |kvstore.set()| only ever
+writes the global scope.
 
 A project is Neovim's current working directory, the one |:pwd| reports, read
 at the moment each command runs. Symbolic links are resolved first, so the
@@ -150,16 +161,22 @@ single command argument.
 ==============================================================================
 7. LUA API                                                       *kvstore-api*
 
-                                                           *kvstore.get()*
+The Lua interface is the configuration side of the plugin: it reads and writes
+the global scope, so a value one plugin stores is readable from every project.
+Per-project values are the commands' business.
+
+                                                               *kvstore.get()*
 require("kvstore").get({key} [, {opts}])
 
     Return the value of {key}, or `nil` and a message.
 
-    {opts} is an optional table. `global = true` reads the global scope; the
-    default is the current project.
+    It looks in the current project first and answers from the global scope
+    when the project has no such key, so a project can override a global
+    setting. {opts} is an optional table: `global = true` reads the global
+    scope only, which is what to use when you need certainty about which value
+    you got.
 
-    This is the whole reason the plugin has a Lua interface: reading a value
-    in a configuration without putting it in the configuration. >lua
+    The value comes back as the type it was stored as. >lua
 
         local token, err = require("kvstore").get("github-token")
         if not token then
@@ -169,15 +186,36 @@ require("kvstore").get({key} [, {opts}])
     It never prints anything and never notifies. A caller decides what a
     missing key means.
 
-                                                         *kvstore.setup()*
+                                                               *kvstore.set()*
+require("kvstore").set({key}, {value})
+
+    Store {value} under {key} and return `true`, or `nil` and a message.
+
+    The write is always global. There is no scope option: configuration that
+    disappeared when you changed directory would be a defect rather than a
+    feature. An existing value is replaced without asking, because nobody is
+    at the keyboard to answer. >lua
+
+        require("kvstore").set("api-key", "k-123")
+        require("kvstore").set("retries", 3)
+        require("kvstore").set("hosts", { "a.example", "b.example" })
+<
+    {value} may be anything `vim.json` can encode: a string, a number, a
+    boolean, or a table of those. It comes back from |kvstore.get()| as the
+    same type. An empty string is a legitimate value. `nil` is not, and is
+    refused. A value that cannot be encoded, such as a function, is refused
+    before the vault is touched.
+
+    Storing a secret through this function is your responsibility rather than
+    the plugin's. See |kvstore-security|.
+
+                                                             *kvstore.setup()*
 require("kvstore").setup([{opts}])
 
     Apply the options in |kvstore-setup| and create the commands. Returns the
     options actually in effect.
 
-There is deliberately no public way to store a value from Lua. A value only
-ever arrives through the prompt, because a Lua setter would be the obvious way
-for a value to get into a configuration file or a script.
+There is no public `delete`. Use |:KVDelete| with `--global`.
 
 Every other module is internal and may change without notice.
 
@@ -197,6 +235,12 @@ along with the values, so the file does not reveal what you store or which
 projects you have. The file begins with the four bytes `KVST` and a format
 version, and every write replaces it atomically, so an interrupted write
 cannot leave a half-written vault.
+
+The current format version is 2, which holds a value of any type `vim.json`
+can encode. Version 1, which held only strings, is still read and is migrated
+to version 2 the first time the vault is written to, with nothing for you to
+do. The migration is one way: a vault written by this version is refused by a
+plugin built against version 1, rather than being misread.
 
 A write takes a lock next to the vault, so two Neovim instances storing
 different keys at the same time cannot lose each other's entry. Reads take no
@@ -262,6 +306,12 @@ What kvstore does:
 
 What kvstore does not do:
 
+- It does not vouch for where a value given to |kvstore.set()| came from. A
+  secret written as a literal in your configuration and then stored is not
+  protected: the plaintext is still in that file, and usually in version
+  control. The vault protects what is in the vault. Storing from Lua is for
+  configuration, and for secrets whose plaintext source you are about to
+  remove.
 - It does not protect you from code running as you. Anything that can run as
   your user can ask the same keystore for the same master key. There is no
   master passphrase in this version, because unlocking without a prompt is
@@ -292,7 +342,7 @@ What kvstore does not do:
   and no way to move keys between projects or machines.
 
 ==============================================================================
-12. REMOVING EVERYTHING                                      *kvstore-removing*
+12. REMOVING EVERYTHING                                     *kvstore-removing*
 
 Delete the vault and the master key. Both are under
 `stdpath("data")/kvstore/`: delete that directory to remove the vault, the
