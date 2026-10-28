@@ -56,12 +56,17 @@ luacheck lua tests
 
 These rules must never be broken, even for convenience, debugging or refactoring.
 
-- A secret value is only ever read with `inputsecret()`. Commands never accept it as an argument.
+- A value typed by a person is only ever read with `inputsecret()`. Commands never accept a value as an
+  argument, and a second positional argument is an error.
+- The Lua API does accept a value as an argument and always writes it to the global scope. A caller that
+  passes a secret is responsible for where that secret came from: storing a literal from a configuration
+  file protects nothing. See ADR-0022.
 - A secret value is passed to external tools through stdin, never through command-line arguments or environment variables.
 - A secret value is never written to a register, the command history, the ShaDa file, a log, a notification or an error message.
 - The only exception is `:KVGet`, which prints the value with `nvim_echo(chunks, false, {})` so it is not added to the message history.
 - A secret value is never stored anywhere except the encrypted vault.
-- Empty input cancels the operation. It is never stored as a value.
+- Empty input at a prompt cancels the operation and is never stored. The Lua API may store an empty
+  string, which is a legitimate configuration value, but never `nil`.
 - Keep secret values in memory only as long as strictly needed.
 
 ## Cross-Platform
