@@ -1,7 +1,7 @@
 # 0006. Global keys require the --global flag
 
 - Date: 2026-10-28T15:02:39Z
-- Status: Accepted
+- Status: Superseded by 0022
 
 ## Context
 

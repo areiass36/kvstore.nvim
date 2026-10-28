@@ -1,7 +1,7 @@
 # 0013. Vault format version 1
 
 - Date: 2026-10-28T15:02:39Z
-- Status: Accepted
+- Status: Superseded by 0023
 
 ## Context
 
